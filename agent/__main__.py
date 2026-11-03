@@ -148,5 +148,6 @@ def main(argv):
     log("end", exit_code=code)
     return code
 
+
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
