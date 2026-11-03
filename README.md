@@ -1,6 +1,6 @@
 # agentic-interaction-ws2627
 
-Exercises for *Agentic Interaction*, winter term 2026/27, Ulm University.
+Exercises for *Human AI Interaction*, winter term 2026/27, Ulm University.
 
 ## Exercise 1: First Tool Call
 
