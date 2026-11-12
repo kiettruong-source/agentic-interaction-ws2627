@@ -1,12 +1,13 @@
-"""Calendar agent: one pass model -> tool -> model.
+"""Calendar agent: model and tools take turns until the model answers or the step limit is reached.
 
-Usage: python -m agent "Was steht am 29.10.2026 im Kalender?"
+Usage: python -m agent "What is on 29 Oct 2026 and on 30 Oct 2026?"
 """
 
 import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 
@@ -44,109 +45,141 @@ TOOLS = [
 SYSTEM_PROMPT = (
     "You are a personal assistant with tools for the user's data. "
     "Use a tool whenever the answer depends on that data; never guess what a tool can look up. "
+    "Work in steps: call tools until you have everything the task needs, then give the final answer. "
     "Dates are YYYY-MM-DD; if the year is missing, assume 2026. "
-    "If a tool returns no data or an error, say so plainly. "
-    "Answer briefly, in the language of the question."
+    "If a tool call fails, fix the call and retry if that can help; if there is no data, say so plainly. "
+    "Answer briefly and in the language of the question: an English question gets an English answer "
+    "even when the calendar entries are German."
 )
 
 CONFIG_KEYS = ("OPENAI_BASE_URL", "MODEL", "OPENAI_API_KEY", "DATA_BASE_URL")
 
 
 class RunLog:
-    """One JSONL file per run; each line is flushed immediately so crashed runs keep their log."""
+    """One JSONL file per run; each line is written at once so crashed runs keep their log.
 
-    def __init__(self):
+    Events: user_task, tool_call, tool_result, final, error. The last line of a run is `final`
+    or an `error` carrying `exit_code`.
+    """
+
+    def __init__(self, model):
         self.run_id = uuid.uuid4().hex
+        self.model = model
         logs = REPO_DIR / "logs"
         logs.mkdir(exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        self.file = open(logs / f"{stamp}-{self.run_id[:8]}.jsonl", "a", encoding="utf-8")
+        self.path = logs / f"{stamp}-{self.run_id[:8]}.jsonl"
 
     def __call__(self, event, **fields):
         ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-        record = {"ts": ts, "run_id": self.run_id, "event": event, **fields}
-        self.file.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        self.file.flush()
+        record = {"ts": ts, "run_id": self.run_id, "event": event, "model": self.model, **fields}
+        with open(self.path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+
+def ms_since(start):
+    return round((time.monotonic() - start) * 1000)
 
 
 def get_calendar_day(base_url, date):
+    """Returns (url, status, data). A tool reports any failure by raising; the loop tells the model."""
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
-        return None, None, {"date": date, "events": [], "error": "date must be YYYY-MM-DD"}
+        raise ValueError("date must be YYYY-MM-DD")
     url = f"{base_url}/calendar/{date}.json"
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
             return url, response.status, json.load(response)
     except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return url, 404, {"date": date, "events": [], "error": "no data for this day"}
+        if e.code == 404:  # not an empty day: a free day has a file with an empty list
+            raise LookupError(f"there is no calendar data for {date}, so it is unknown whether "
+                              "that day is free") from None
         raise
 
 
 def fail(log, code, message, **fields):
+    """End the run as an error: message to stderr, last line of the log, exit code."""
     print(message, file=sys.stderr)
-    log("error", message=message, **fields)
+    log("error", ok=False, message=message, exit_code=code, **fields)
     return code
 
 
 def run(log, argv):
     question = " ".join(argv[1:]).strip()
-    load_dotenv(REPO_DIR / ".env", override=False)  # real environment variables win
     config = {k: os.environ.get(k, "") for k in CONFIG_KEYS}
-    log("start", question=question, model=config["MODEL"],
-        base_url=config["OPENAI_BASE_URL"], data_base_url=config["DATA_BASE_URL"])
+    max_steps = os.environ.get("MAX_STEPS") or "10"
+    log("user_task", task=question, base_url=config["OPENAI_BASE_URL"],
+        data_base_url=config["DATA_BASE_URL"], max_steps=max_steps)
 
     if not question:
         return fail(log, 2, 'usage: python -m agent "<question>"')
     missing = [k for k, v in config.items() if not v]
     if missing:
         return fail(log, 2, f"missing in environment/.env: {', '.join(missing)}")
+    if not max_steps.isdecimal() or int(max_steps) < 1:
+        return fail(log, 2, f"MAX_STEPS must be a positive integer, got {max_steps!r}")
 
-    client = OpenAI(base_url=config["OPENAI_BASE_URL"], api_key=config["OPENAI_API_KEY"])
+    client = OpenAI(base_url=config["OPENAI_BASE_URL"], api_key=config["OPENAI_API_KEY"], timeout=60)
     data_base_url = config["DATA_BASE_URL"].rstrip("/")
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": question}]
 
-    try:
-        # Pass 1: the model must pick the tool call(s).
-        log("model_request", messages=messages, tools=TOOLS)
-        response = client.chat.completions.create(
-            model=config["MODEL"], messages=messages, tools=TOOLS, tool_choice="required")
+    for step in range(1, int(max_steps) + 1):  # one step = one model call
+        started = time.monotonic()
+        try:
+            response = client.chat.completions.create(
+                model=config["MODEL"], messages=messages, tools=TOOLS)
+        except BadRequestError as e:
+            # The endpoint rejected the model's own output (e.g. a malformed tool call):
+            # this step failed, the run goes on.
+            log("error", step=step, ok=False, duration_ms=ms_since(started),
+                message=str(e), type=type(e).__name__)
+            messages.append({"role": "user", "content": f"Your last reply was rejected: {e}. Try again."})
+            continue
         reply = response.choices[0].message
         tool_calls = reply.tool_calls or []
-        calls = [c.model_dump() for c in tool_calls]
-        log("model_response", content=reply.content, tool_calls=calls,
-            usage=response.usage and response.usage.model_dump())
-        messages.append({"role": "assistant", "content": reply.content, "tool_calls": calls})
+        info = {"step": step, "duration_ms": ms_since(started),
+                "usage": response.usage and response.usage.model_dump()}
 
-        # Run every requested tool call (a question may cover several days).
+        if not tool_calls:
+            if reply.content:  # text and no tool call: the model decided it is done
+                print(reply.content)
+                log("final", ok=True, answer=reply.content, exit_code=0, **info)
+                return 0
+            log("error", ok=False, message="empty reply from the model", type="EmptyReply", **info)
+            continue
+
+        messages.append({"role": "assistant", "content": reply.content,
+                         "tool_calls": [c.model_dump() for c in tool_calls]})
         for call in tool_calls:
-            args = json.loads(call.function.arguments or "{}")
-            log("tool_call", name=call.function.name, arguments=args)
-            if call.function.name == "get_calendar_day":
-                url, status, result = get_calendar_day(data_base_url, args.get("date", ""))
-            else:
-                url, status, result = None, None, {"error": f"unknown tool {call.function.name}"}
-            log("tool_result", name=call.function.name, url=url, status=status, result=result)
+            tool, args = call.function.name, call.function.arguments
+            try:
+                args = json.loads(args or "{}")
+            except ValueError:
+                pass  # not JSON: logged as the model sent it, and the call below fails
+            log("tool_call", tool=tool, args=args, ok=True, **info)
+            tool_started = time.monotonic()
+            try:
+                if tool != "get_calendar_day":
+                    raise ValueError(f"unknown tool {tool}")
+                url, status, result = get_calendar_day(data_base_url, **args)
+                ok = True
+            except Exception as e:  # a failed tool call is a result the model reads, not the end of the run
+                ok, url, status, result = False, None, None, {"error": f"{type(e).__name__}: {e}"}
+            log("tool_result", step=step, tool=tool, args=args, ok=ok,
+                duration_ms=ms_since(tool_started), url=url, status=status, result=result)
             messages.append({"role": "tool", "tool_call_id": call.id,
                              "content": json.dumps(result, ensure_ascii=False)})
-
-        # Pass 2: answer from the tool results.
-        log("model_request", messages=messages)
-        response = client.chat.completions.create(model=config["MODEL"], messages=messages)
-        answer = response.choices[0].message.content or ""
-        log("model_response", content=answer, usage=response.usage and response.usage.model_dump())
-    except Exception as e:
-        return fail(log, 1, f"error: {e}", type=type(e).__name__)
-
-    print(answer)
-    log("answer", text=answer)
-    return 0
+    return fail(log, 1, f"error: step limit of {max_steps} reached without an answer", type="StepLimit")
 
 
 def main(argv):
-    log = RunLog()
-    code = run(log, argv)
-    log("end", exit_code=code)
-    return code
+    load_dotenv(REPO_DIR / ".env", override=False)  # real environment variables win
+    log = RunLog(os.environ.get("MODEL", ""))
+    try:
+        return run(log, argv)
+    except KeyboardInterrupt:
+        return fail(log, 130, "interrupted")
+    except Exception as e:  # anything a step could not recover from ends the run
+        return fail(log, 1, f"error: {e}", type=type(e).__name__)
 
 
 if __name__ == "__main__":
