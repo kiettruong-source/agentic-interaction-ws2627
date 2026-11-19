@@ -2,19 +2,33 @@
 
 Exercises for *Human AI Interaction*, winter term 2026/27, Ulm University.
 
-## The agent (Exercises 1 and 3)
+## The agent (Exercises 1, 3 and 4)
 
-`agent/` answers a question about the mock calendar. Model and tools take turns: each step is one
-model call, in which the model either asks for a tool or answers. An answer ends the run with exit
-code 0. A run that has no answer after `MAX_STEPS` steps ends as an error.
+`agent/` answers questions about the mock calendar, weather and train connections. Model and tools
+take turns: each step is one model call, in which the model either asks for tools or answers. An
+answer ends the run with exit code 0. A run that has no answer after `MAX_STEPS` steps ends as an error.
 
-The model has one tool, `get_calendar_day(date)`, which reads
-`{DATA_BASE_URL}/calendar/{YYYY-MM-DD}.json` (HTTP 404 = no data, not a crash).
-The default model asks for one tool per step, so a question about *n* days takes *n* + 1 steps.
+All tools read JSON from `DATA_BASE_URL`. They are defined in one table, `TOOLS` in `agent/__main__.py`:
 
-A failed step does not end the run. A tool call that fails (bad date, no data, network down, unknown
-tool) goes back to the model as an error result. A reply that the endpoint rejects, or an empty reply,
-is logged and followed by the next step.
+| Tool | Reads | Arguments |
+|---|---|---|
+| `get_calendar_day` | `calendar/{date}.json` | `date` |
+| `get_weather` | `weather/{city}/{date}.json` | `city`, `date` |
+| `get_connections` | `transit/{from_city}/{to_city}/{date}.json` | `from_city`, `to_city`, `date` |
+| `get_context` | `context.json` (current time, home city) | none |
+
+Arguments are checked before any request:
+- `date` must be a real day as `YYYY-MM-DD`.
+- `city` must be one of the ids in `index.json` (`ulm`, `muenchen`). An unknown id such as `munich` or
+  `berlin` gets back the list of known ids.
+- Missing, extra or non-string arguments are rejected.
+
+HTTP 404 means there is no data. The tool then tells the model the value is unknown, so the agent
+says so instead of inventing one. An empty list is data: a free day, or no trains.
+
+A failed step does not end the run. A tool call that fails (bad argument, no data, network down,
+unknown tool) goes back to the model as an error result. A reply that the endpoint rejects, or an
+empty reply, is logged and followed by the next step.
 
 ### Setup
 
@@ -41,6 +55,7 @@ Optional: `MAX_STEPS` (default 10) is the most model calls one run may make.
 ```bash
 python -m agent "What is on 29 Oct 2026 and on 30 Oct 2026?"
 python -m agent "Was steht am 29.10.2026 im Kalender?"
+python -m agent "How do I get to Munich on 29 Oct 2026, and do I need an umbrella?"
 MAX_STEPS=1 python -m agent "What is on 29 Oct 2026 and on 30 Oct 2026?"   # hits the step limit
 ```
 
@@ -74,4 +89,4 @@ python -m unittest
 ```
 
 `test_agent.py` runs the loop against scripted model replies and fake calendar data, so it needs no
-network and no tokens. It covers several steps, the step limit, failed steps, and the log format.
+network and no tokens. It covers several steps, the step limit, failed steps, both new tools, missing data, bad arguments, and the log format.

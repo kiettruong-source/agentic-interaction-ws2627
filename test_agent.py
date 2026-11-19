@@ -22,24 +22,35 @@ import agent.__main__ as agent
 ENV = {"OPENAI_BASE_URL": "http://model", "MODEL": "test-model", "OPENAI_API_KEY": "key",
        "DATA_BASE_URL": "http://data", "MAX_STEPS": ""}
 SPEC_EVENTS = {"user_task", "tool_call", "tool_result", "final", "error"}
-DAYS = {"2026-10-29": [{"title": "Standup Projektteam"}], "2026-10-30": []}
+DATA = {  # path under DATA_BASE_URL -> body; any other path is a 404
+    "calendar/2026-10-29.json": {"date": "2026-10-29", "events": [{"title": "Standup Projektteam"}]},
+    "calendar/2026-10-30.json": {"date": "2026-10-30", "events": []},
+    "weather/muenchen/2026-10-29.json": {"city": "München", "condition": "Schauer", "rain_probability": 0.6},
+    "transit/ulm/muenchen/2026-10-29.json": {"connections": [{"departure": "07:12", "train": "ICE 594"}]},
+    "transit/ulm/muenchen/2026-10-31.json": {"connections": []},
+    "context.json": {"now": "2026-10-29T07:20", "home": "Ulm"},
+    "index.json": {"cities": {"ulm": "Ulm", "muenchen": "München"}},
+}
 
 
 def fake_urlopen(url, timeout=None):
-    """The mock calendar: two days exist, one answers 500, one has no network, the rest are 404."""
-    date = url.rsplit("/", 1)[-1].removesuffix(".json")
-    if date in DAYS:
-        body = io.BytesIO(json.dumps({"date": date, "events": DAYS[date]}).encode())
+    """The mock data: the paths in DATA exist, 2026-11-01 answers 500, 2026-11-02 has no network."""
+    path = url.removeprefix("http://data/")
+    if path in DATA:
+        body = io.BytesIO(json.dumps(DATA[path]).encode())
         body.status = 200
         return body
-    if date == "2026-11-02":
+    if "2026-11-02" in path:
         raise urllib.error.URLError("network down")
-    raise urllib.error.HTTPError(url, 500 if date == "2026-11-01" else 404, "failed", {}, None)
+    raise urllib.error.HTTPError(url, 500 if "2026-11-01" in path else 404, "failed", {}, None)
 
 
 def call(arguments, name="get_calendar_day"):
-    """A tool call as the OpenAI client returns it."""
-    return ToolCall(id=f"call-{arguments}", type="function", function={"name": name, "arguments": arguments})
+    """A tool call as the OpenAI client returns it; dict arguments are sent as JSON."""
+    if not isinstance(arguments, str):
+        arguments = json.dumps(arguments)
+    return ToolCall(id=f"call-{name}-{arguments}", type="function",
+                    function={"name": name, "arguments": arguments})
 
 
 def day(date):
@@ -65,10 +76,12 @@ class AgentLoopTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(agent, "REPO_DIR", Path(tmp)), \
                 mock.patch.object(agent, "OpenAI", return_value=client), \
-                mock.patch("urllib.request.urlopen", fake_urlopen), \
+                mock.patch("urllib.request.urlopen", side_effect=fake_urlopen) as urlopen, \
                 mock.patch.dict(os.environ, env), \
                 redirect_stdout(out), redirect_stderr(io.StringIO()):
             code = agent.main(["agent", question] if question else ["agent"])
+            self.requested = [c.args[0].removeprefix("http://data/") for c in urlopen.call_args_list
+                              if not c.args[0].endswith("/index.json")]
             (logfile,) = Path(tmp, "logs").glob("*.jsonl")
             log = [json.loads(line) for line in logfile.read_text(encoding="utf-8").splitlines()]
 
@@ -154,3 +167,61 @@ class AgentLoopTest(unittest.TestCase):
             with self.subTest(question=question, env=env):
                 code, out, _, create = self.run_agent([], question=question, **env)
                 self.assertEqual((code, out, create.call_count), (2, "", 0))
+
+    # Exercise 4: weather and train connections
+
+    def test_two_tools_in_one_run(self):
+        answer = "ICE 594 at 07:12; take an umbrella (60% rain)."
+        code, out, log, create = self.run_agent([
+            reply(None, call({}, "get_context")),
+            reply(None, call({"from_city": "ulm", "to_city": "muenchen", "date": "2026-10-29"},
+                             "get_connections")),
+            reply(None, call({"city": "muenchen", "date": "2026-10-29"}, "get_weather")),
+            reply(answer),
+        ], question="How do I get to Munich on 29 Oct 2026, and do I need an umbrella?")
+        self.assertEqual((code, out, create.call_count), (0, answer + "\n", 4))
+        results = self.events(log, "tool_result")
+        self.assertEqual([r["tool"] for r in results], ["get_context", "get_connections", "get_weather"])
+        self.assertEqual([r["ok"] for r in results], [True] * 3)
+        self.assertEqual(self.requested, ["context.json", "transit/ulm/muenchen/2026-10-29.json",
+                                          "weather/muenchen/2026-10-29.json"])
+        self.assertEqual(results[0]["result"]["home"], "Ulm")  # the start city comes from the data
+
+    def test_gaps_and_bad_arguments_never_become_values(self):
+        weather = "get_weather"
+        cases = [  # (tool, arguments, ok, error type the model reads)
+            (weather, {"city": "berlin", "date": "2026-10-29"}, False, "ValueError"),    # not in index.json
+            (weather, {"city": "munich", "date": "2026-10-29"}, False, "ValueError"),    # English name
+            (weather, {"city": "ulm", "date": "2026-12-24"}, False, "LookupError"),      # no such day
+            ("get_connections", {"from_city": "ulm", "to_city": "muenchen", "date": "2026-10-31"},
+             True, None),                                                                # no trains: data, not a gap
+            (weather, {"city": "München", "date": "2026-10-29"}, False, "ValueError"),  # not an id
+            (weather, {"city": "../calendar", "date": "2026-10-29"}, False, "ValueError"),
+            (weather, {"city": "muenchen", "date": "2026-02-31"}, False, "ValueError"),  # no such day
+            (weather, {"city": "muenchen", "date": "29.10.2026"}, False, "ValueError"),
+            (weather, {"city": "muenchen", "date": 20261029}, False, "ValueError"),      # not a string
+            (weather, {"date": "2026-10-29"}, False, "ValueError"),                      # missing
+            (weather, {"city": "muenchen", "date": "2026-10-29", "unit": "C"}, False, "ValueError"),
+            ("get_context", {"city": "ulm"}, False, "ValueError"),                       # takes none
+            ("get_train", {}, False, "ValueError"),                                      # unknown tool
+        ]
+        code, _, log, _ = self.run_agent(
+            [reply(None, *(call(args, tool) for tool, args, _, _ in cases)), reply("No data.")])
+        self.assertEqual(code, 0)
+        results = self.events(log, "tool_result")
+        self.assertEqual([r["ok"] for r in results], [ok for _, _, ok, _ in cases])
+        for r, (_, _, ok, error) in zip(results, cases):
+            if error:
+                self.assertTrue(r["result"]["error"].startswith(error + ":"), r["result"])
+        self.assertEqual(results[3]["result"], {"connections": []})
+        self.assertIn("muenchen (München)", results[1]["result"]["error"])  # tells the model the real id
+        # Invalid arguments are rejected before any request; only the two valid calls went out.
+        self.assertEqual(self.requested, ["weather/ulm/2026-12-24.json", "transit/ulm/muenchen/2026-10-31.json"])
+
+    def test_tool_table_matches_its_paths(self):
+        from string import Formatter
+        for name, (path, _, params) in agent.TOOLS.items():
+            with self.subTest(tool=name):
+                placeholders = {field for _, field, _, _ in Formatter().parse(path) if field}
+                self.assertEqual(placeholders, set(params))
+        self.assertEqual([s["function"]["name"] for s in agent.TOOL_SCHEMAS], list(agent.TOOLS))
