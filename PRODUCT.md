@@ -9,8 +9,9 @@ web
 ## Stack
 
 Python standard library only (`http.server`) serving one static HTML page; no new pip dependencies.
-GSAP loaded from a CDN for motion (user request). The CLI agent in `agent/__main__.py` stays the
-graded interface; the web panel is an extra that calls the same loop.
+GSAP, marked and DOMPurify are vendored in `agent/vendor/` and the fonts in `agent/fonts/`, so the
+panel works offline. The CLI agent in `agent/__main__.py` stays the graded interface; the web panel
+is an extra that calls the same loop.
 
 ## Users
 
