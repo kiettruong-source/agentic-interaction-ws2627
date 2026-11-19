@@ -66,6 +66,28 @@ MAX_STEPS=1 python -m agent "What is on 29 Oct 2026 and on 30 Oct 2026?"   # hit
 | 2 | missing question or configuration |
 | 130 | interrupted with Ctrl-C |
 
+### Chat panel (optional)
+
+```bash
+python -m agent.web          # then open http://127.0.0.1:8000 (another port: python -m agent.web 8080)
+```
+
+A local web page for chatting with the same agent. `agent/web.py` (standard library only) serves
+`agent/chat.html` and runs the real loop for each question, so every run is still logged to `logs/`
+like a CLI run. The page shows:
+- the answer, with a seal and a heading saying how the run ended: answered, not in the records,
+  step limit reached, connection failed, or setup needed
+- cards built from what the tools actually returned (weather, trains, calendar day, context)
+- a "not in the records" card for each place or day without data
+- a collapsible step trail: each tool call with its arguments, ok or failed, its duration, and the
+  run's total tokens
+- a token bar in the header: tokens the model used in the last 60 seconds (from `logs/`, so CLI runs
+  count too) against the free tier's 8,000 per minute. Set `TOKEN_LIMIT` for another plan.
+
+The server listens on 127.0.0.1 only, so the API key never leaves your machine. It runs one
+question at a time. Fonts are self-hosted in `agent/fonts/` (SIL Open Font License); GSAP, marked
+and DOMPurify load from a CDN.
+
 ### Logs
 
 Each run writes its own JSONL file to `logs/<UTC timestamp>-<run id>.jsonl` (not committed).

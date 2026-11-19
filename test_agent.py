@@ -225,3 +225,39 @@ class AgentLoopTest(unittest.TestCase):
                 placeholders = {field for _, field, _, _ in Formatter().parse(path) if field}
                 self.assertEqual(placeholders, set(params))
         self.assertEqual([s["function"]["name"] for s in agent.TOOL_SCHEMAS], list(agent.TOOLS))
+
+
+class WebPanelTest(unittest.TestCase):
+    """agent/web.py runs the same loop and returns what the page renders."""
+
+    def test_ask_returns_answer_exit_code_and_log(self):
+        create = mock.Mock(side_effect=[reply(None, day("2026-10-29")), reply("Standup at 09:00.")])
+        client = NS(chat=NS(completions=NS(create=create)))
+        import agent.web as web
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(agent, "REPO_DIR", Path(tmp)), \
+                mock.patch.object(web, "REPO_DIR", Path(tmp)), \
+                mock.patch.object(agent, "OpenAI", return_value=client), \
+                mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+                mock.patch.dict(os.environ, ENV):
+            run = web.ask("What is on 29 Oct 2026?")
+            (logfile,) = Path(tmp, "logs").glob("*.jsonl")  # the web run is logged like a CLI run
+            logged = [json.loads(line) for line in logfile.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual((run["exit_code"], run["answer"], run["error"]), (0, "Standup at 09:00.", ""))
+        self.assertEqual(run["events"], logged)
+        self.assertEqual([e["event"] for e in run["events"]], ["user_task", "tool_call", "tool_result", "final"])
+
+    def test_tokens_last_minute_counts_each_step_once(self):
+        import agent.web as web
+        from datetime import datetime, timedelta, timezone
+        now = datetime(2026, 11, 19, 12, 0, 0, tzinfo=timezone.utc)
+        line = lambda secs_ago, step, tokens, event="tool_call": json.dumps({
+            "ts": (now - timedelta(seconds=secs_ago)).isoformat(), "run_id": "r1", "event": event,
+            "step": step, "usage": {"total_tokens": tokens}})
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "run.jsonl").write_text("\n".join([
+                line(90, 1, 1000),               # older than a minute: not counted
+                line(30, 2, 400), line(30, 2, 400),  # two tool calls from one reply: counted once
+                line(5, 3, 650, "final"),
+            ]) + "\n", encoding="utf-8")
+            self.assertEqual(web.tokens_last_minute(tmp, now), 1050)

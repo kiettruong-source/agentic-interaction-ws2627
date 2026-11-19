@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask the agent</title>
+<style>
+@font-face { font-family: "Zen Maru Gothic"; src: url("/fonts/ZenMaruGothic-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Zen Maru Gothic"; src: url("/fonts/ZenMaruGothic-500.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Zen Maru Gothic"; src: url("/fonts/ZenMaruGothic-700.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Shippori Mincho"; src: url("/fonts/ShipporiMincho-500.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Shippori Mincho"; src: url("/fonts/ShipporiMincho-700.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("/fonts/JetBrainsMono-400-600.woff2") format("woff2"); font-weight: 400 600; font-display: swap; }
+
+:root {
+  --dawn-top: #f6e8ee;     /* sakura haze */
+  --dawn-bottom: #e4ecf5;  /* pale sora */
+  --paper: rgb(255 255 255 / .78);
+  --paper-solid: #fdfcfd;
+  --hinoki: #dccab0;
+  --hinoki-deep: #a88d68;
+  --ink: #2f2a38;
+  --ink-soft: #57506a;
+  --ink-faint: #6e6882;
+  --matcha: #d4e6c9; --matcha-ink: #46703b;
+  --sora: #d5e5f4;   --sora-ink: #375f86;
+  --fuji: #e4daf2;   --fuji-ink: #634d99;
+  --kaki: #f7dccb;   --kaki-ink: #9b4a25;
+  --sakura: #f8d9e1; --sakura-ink: #a3445f;
+  --seal: var(--matcha); --seal-ink: var(--matcha-ink);
+  --radius: 3px;
+  --title-font: "Shippori Mincho", "Hiragino Mincho ProN", serif;
+  --read-font: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", system-ui, sans-serif;
+  --data-font: "JetBrains Mono", ui-monospace, monospace;
+  --lattice: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='16'%3E%3Cpath d='M0 .75H24M0 8H24M0 15.25H24M.75 0V16M12.75 0V8' stroke='%23c9b08c' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: linear-gradient(180deg, var(--dawn-top) 0%, #eee9f2 45%, var(--dawn-bottom) 100%) fixed;
+  color: var(--ink);
+  font: 400 16px/1.7 var(--read-font);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  caret-color: var(--sakura-ink);
+}
+::selection { background: var(--sakura); color: var(--ink); }
+* { scrollbar-width: thin; scrollbar-color: var(--hinoki) transparent; }
+:focus-visible { outline: 2px solid var(--sora-ink); outline-offset: 3px; border-radius: 4px; }
+
+/* Header */
+.bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap;
+  padding: 16px clamp(16px, 4vw, 40px);
+  background: rgb(255 255 255 / .55);
+  border-bottom: 1px solid var(--hinoki);
+}
+.bar h1 { margin: 0; font: 700 1.55rem/1.1 var(--title-font); letter-spacing: .01em; }
+.meta { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; }
+.chip { font: 500 .82rem/1 var(--read-font); color: var(--ink-soft); border: 1px solid var(--hinoki); border-radius: 3px; padding: 6px 11px; background: var(--paper-solid); white-space: nowrap; }
+.chip b { color: var(--ink); font-weight: 700; }
+
+/* Token use in the current minute, against the model's per-minute limit */
+.budget { display: grid; gap: 5px; min-width: 210px; font-size: .8rem; color: var(--ink-soft); }
+.budget-line { display: flex; justify-content: space-between; gap: 10px; }
+.budget-line b { font: 600 .8rem var(--data-font); color: var(--ink); }
+.budget-track { height: 7px; border-radius: 99px; background: rgb(168 141 104 / .2); overflow: hidden; }
+.budget-fill { height: 100%; width: 0; border-radius: 99px; background: var(--matcha-ink); transition: width .8s cubic-bezier(.22, 1, .36, 1), background .4s; }
+.budget[data-level="high"] .budget-fill { background: #b8892f; }
+.budget[data-level="full"] .budget-fill { background: var(--kaki-ink); }
+.budget[data-level="full"] .budget-note { color: var(--kaki-ink); }
+.budget-note { min-height: 1em; }
+
+/* Thread */
+main { overflow-y: auto; scroll-behavior: smooth; }
+.thread { max-width: 820px; margin: 0 auto; padding: 36px 16px 48px; display: grid; gap: 44px; }
+
+.empty { text-align: center; padding: 7vh 0 0; }
+.empty h2 { margin: 0 0 10px; font: 700 clamp(2rem, 5vw, 2.8rem)/1.15 var(--title-font); }
+.empty p { margin: 0 auto 30px; color: var(--ink-soft); max-width: 44ch; }
+.samples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; text-align: left; max-width: 700px; margin: 0 auto; }
+.sample {
+  font: 500 .98rem/1.55 var(--read-font); color: var(--ink); text-align: left;
+  background: var(--paper); border: 1px solid var(--hinoki); border-radius: var(--radius);
+  padding: 16px 18px; cursor: pointer; transition: border-color .3s, background .3s, transform .3s;
+}
+.sample:hover { border-color: var(--hinoki-deep); background: var(--paper-solid); transform: translateY(-2px); }
+
+.turn { display: grid; gap: 18px; scroll-margin-top: 20px; }
+.ask { margin: 0; display: flex; gap: 14px; align-items: flex-start; padding: 0 0 16px; border-bottom: 1px solid var(--hinoki); font: 500 1.08rem/1.6 var(--read-font); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Seals: one drawn mark in a square frame, in the outcome's colour */
+.seal {
+  flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 2px;
+  background: var(--seal); color: var(--seal-ink);
+  border: 2px solid var(--seal-ink); box-shadow: inset 0 0 0 2px var(--seal), inset 0 0 0 3px color-mix(in srgb, var(--seal-ink) 55%, transparent);
+}
+.seal svg { width: 24px; height: 24px; stroke: currentColor; }
+.ask .seal { --seal: var(--sakura); --seal-ink: var(--sakura-ink); width: 32px; height: 32px; border-width: 1.5px; box-shadow: none; }
+.ask .seal svg { width: 22px; height: 22px; }
+
+.reply { --seal: var(--matcha); --seal-ink: var(--matcha-ink); display: grid; gap: 16px; scroll-margin-top: 24px; }
+.reply[data-outcome="nodata"], .reply[data-outcome="partly"] { --seal: var(--sora); --seal-ink: var(--sora-ink); }
+.reply[data-outcome="steps"] { --seal: var(--fuji); --seal-ink: var(--fuji-ink); }
+.reply[data-outcome="dropped"], .reply[data-outcome="setup"], .reply[data-outcome="offline"] { --seal: var(--kaki); --seal-ink: var(--kaki-ink); }
+.reply[data-outcome="working"] { --seal: var(--sakura); --seal-ink: var(--sakura-ink); }
+.reply[data-outcome="working"] .seal { animation: breathe 2.4s ease-in-out infinite; }
+@keyframes breathe { 50% { transform: scale(.92); opacity: .6; } }
+
+.outcome { display: flex; gap: 14px; align-items: center; }
+.outcome h2 { margin: 0; font: 700 1.3rem/1.2 var(--title-font); color: var(--seal-ink); }
+.outcome p { margin: 2px 0 0; color: var(--ink-soft); font-size: .95rem; }
+
+/* The screen: paper in a thin hinoki frame with a lattice rail along the top */
+.screen { display: grid; gap: 14px; }
+.panel {
+  position: relative; background: var(--paper); border: 1px solid var(--hinoki); border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.panel.answer { padding-top: 34px; }
+.panel.answer::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 16px;
+  background: var(--lattice) 0 0 / 24px 16px; border-bottom: 1px solid var(--hinoki-deep);
+}
+.answer { overflow-wrap: anywhere; }
+.answer > :first-child, .answer > .table-wrap:first-child { margin-top: 0; }
+.answer > :last-child { margin-bottom: 0; }
+.answer p, .answer ul, .answer ol { margin: 0 0 .75em; max-width: 68ch; }
+.answer li { margin: .2em 0; }
+.answer strong { font-weight: 700; color: var(--ink); }
+.answer em { font-style: normal; color: var(--ink-soft); }
+.answer a { color: var(--sora-ink); text-underline-offset: 3px; }
+.answer code { font: .88em var(--data-font); background: rgb(220 202 176 / .3); padding: 1px 5px; border-radius: 4px; }
+.answer table, .trains table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.answer th, .answer td, .trains th, .trains td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgb(220 202 176 / .7); }
+.answer th, .trains th { font: 700 .78rem/1.3 var(--read-font); color: var(--ink-soft); }
+.table-wrap { overflow-x: auto; margin: 0 0 .75em; }
+.answer.error { color: var(--kaki-ink); }
+.working-line { margin: 0; color: var(--ink-soft); }
+.working-line b { font: 600 .88rem var(--data-font); color: var(--ink); }
+
+/* Data cards built from what the tools returned */
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.card { display: grid; gap: 10px; align-content: start; }
+.card.wide { grid-column: 1 / -1; }
+.card-head { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; }
+.card-head svg { width: 20px; height: 20px; flex: none; stroke: var(--hinoki-deep); }
+.card-head h3 { margin: 0; font: 700 1.1rem/1.3 var(--title-font); }
+.card-head .when { margin-left: auto; font: .8rem var(--data-font); color: var(--ink-faint); white-space: nowrap; }
+.temp { grid-area: temp; font: 700 2.5rem/1 var(--title-font); }
+.weather { grid-template-areas: "head" "temp" "cond" "rain" "tag"; }
+.weather .card-head { grid-area: head; } .weather .cond { grid-area: cond; } .weather .rain { grid-area: rain; } .weather .tag { grid-area: tag; }
+.weather.wide { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 28px; grid-template-areas: "head head" "temp rain" "cond tag"; align-items: center; }
+.temp small { font-size: .5em; color: var(--ink-soft); margin-left: 2px; }
+.cond { color: var(--ink-soft); }
+.rain { display: grid; gap: 5px; font-size: .88rem; color: var(--ink-soft); }
+.rain-bar { height: 7px; background: rgb(168 141 104 / .2); border-radius: 99px; overflow: hidden; }
+.rain-bar i { display: block; height: 100%; background: var(--sora-ink); border-radius: 99px; }
+.tag { justify-self: start; font: 700 .78rem/1 var(--read-font); color: var(--sora-ink); background: var(--sora); padding: 6px 10px; border-radius: 3px; }
+.trains td { font: .9rem var(--data-font); }
+.trains td.train { font: 700 .95rem var(--read-font); }
+.trains td.changes { font-family: var(--read-font); color: var(--ink-soft); }
+.events { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.events li { display: grid; grid-template-columns: 110px 1fr; gap: 12px; }
+.events time { font: .86rem/1.9 var(--data-font); color: var(--ink-soft); }
+.events span small { display: block; color: var(--ink-faint); font-size: .86rem; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; }
+.facts .chip b { font: 600 .8rem/1 var(--data-font); }
+.gap-card { border-style: dashed; border-color: color-mix(in srgb, var(--sora-ink) 45%, var(--hinoki)); background: rgb(213 229 244 / .35); }
+.gap-card p { margin: 0; color: var(--ink-soft); }
+.muted { color: var(--ink-faint); margin: 0; }
+
+/* Step trail: one line per step, status in a fixed cell */
+.trail { border: 1px solid var(--hinoki); border-radius: var(--radius); background: rgb(255 255 255 / .5); }
+.trail summary { cursor: pointer; padding: 12px 18px; list-style: none; display: flex; gap: 10px; align-items: center; font-size: .92rem; color: var(--ink-soft); }
+.trail summary::-webkit-details-marker { display: none; }
+.trail summary::before { content: ""; border: 5px solid transparent; border-left: 7px solid currentColor; border-right: 0; }
+.trail[open] summary::before { transform: rotate(90deg); }
+.trail summary b { color: var(--ink); font-weight: 700; }
+.trail ol { list-style: none; margin: 0; padding: 0 18px 14px; display: grid; }
+.step { display: grid; grid-template-columns: 18px 40px 1fr auto; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid rgb(220 202 176 / .7); font-size: .92rem; }
+.cell { width: 12px; height: 12px; margin-top: 6px; border: 2px solid var(--matcha-ink); border-radius: 3px; background: var(--matcha-ink); }
+.step.fail .cell { background: transparent; border-color: var(--kaki-ink); position: relative; }
+.step.fail .cell::after { content: ""; position: absolute; left: -3px; right: -3px; top: 3px; height: 2px; background: var(--kaki-ink); transform: rotate(-45deg); }
+.step.end .cell { background: var(--seal-ink); border-color: var(--seal-ink); }
+.step .n { font: .8rem/1.9 var(--data-font); color: var(--ink-faint); }
+.step .what { overflow-wrap: anywhere; }
+.step .what code { font: .82rem var(--data-font); color: var(--ink-soft); }
+.step .why { display: block; color: var(--kaki-ink); font-size: .86rem; }
+.step .ms { font: .78rem/1.9 var(--data-font); color: var(--ink-faint); }
+
+/* Composer */
+.composer { background: rgb(255 255 255 / .6); border-top: 1px solid var(--hinoki); padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); }
+.composer form { max-width: 820px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+.composer textarea {
+  flex: 1; resize: none; min-height: 52px; max-height: 180px; padding: 13px 16px;
+  font: 400 1rem/1.55 var(--read-font); color: var(--ink);
+  background: var(--paper-solid); border: 1px solid var(--hinoki); border-radius: var(--radius);
+}
+.composer textarea::placeholder { color: var(--ink-faint); }
+.composer textarea:focus { border-color: var(--hinoki-deep); outline: none; box-shadow: 0 0 0 3px rgb(168 141 104 / .2); }
+.send {
+  display: inline-flex; align-items: center; gap: 8px; height: 52px; padding: 0 22px;
+  font: 700 1rem/1 var(--read-font); color: #fff; background: var(--sakura-ink);
+  border: 0; border-radius: var(--radius); cursor: pointer;
+  box-shadow: 0 2px 6px rgb(47 42 56 / .18); transition: background .2s, transform .2s;
+}
+.send svg { width: 18px; height: 18px; stroke: currentColor; }
+.send:hover { background: #8f3651; transform: translateY(-1px); }
+.send:disabled { background: #c9bfcf; color: #fff; cursor: progress; transform: none; box-shadow: none; }
+.hint { max-width: 820px; margin: 8px auto 0; font-size: .8rem; color: var(--ink-faint); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .bar { padding: 10px 16px; row-gap: 6px; }
+  .bar h1 { font-size: 1.25rem; }
+  .meta { flex: 1 1 100%; }
+  .budget { min-width: 0; flex: 1 1 100%; gap: 4px; }
+  .budget[data-level="low"] .budget-note { display: none; }
+  .chip { display: none; }
+  .samples, .cards { grid-template-columns: 1fr; }
+  .events li { grid-template-columns: 1fr; gap: 0; }
+  .step { grid-template-columns: 16px 32px 1fr; }
+  .step .ms { grid-column: 3; }
+  .send span { display: none; }
+  .send { padding: 0 16px; }
+  .hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1>Ask the agent</h1>
+  <div class="meta">
+    <div class="budget" id="budget" hidden>
+      <div class="budget-line"><span>Tokens this minute</span><b id="budget-count"></b></div>
+      <div class="budget-track" role="progressbar" aria-label="Tokens used in the last minute" aria-valuemin="0" id="budget-bar"><div class="budget-fill" id="budget-fill"></div></div>
+      <span class="budget-note" id="budget-note"></span>
+    </div>
+    <span class="chip" id="model-chip" hidden>model <b></b></span>
+    <span class="chip" id="steps-chip" hidden>step limit <b></b></span>
+  </div>
+</header>
+
+<main id="scroller">
+  <div class="thread" id="thread" aria-live="polite">
+    <section class="empty" id="empty">
+      <h2>Good morning.</h2>
+      <p>Ask about your calendar, the weather, or trains between Ulm and Munich. Every answer comes from the records.</p>
+      <div class="samples">
+        <button class="sample" type="button">How do I get to Munich on 29 Oct 2026, and do I need an umbrella?</button>
+        <button class="sample" type="button">What is on 29 Oct 2026 and on 30 Oct 2026?</button>
+        <button class="sample" type="button">What is the weather in Berlin on 29 Oct 2026?</button>
+        <button class="sample" type="button">Was steht am 29.10.2026 im Kalender?</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="composer">
+  <form id="form">
+    <label class="sr-only" for="q">Your question</label>
+    <textarea id="q" rows="1" maxlength="2000" placeholder="Calendar, weather, trains…" autofocus></textarea>
+    <button class="send" id="send" type="submit">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h14M12 5l7 7-7 7"/></svg>
+      <span>Ask</span>
+    </button>
+  </form>
+  <p class="hint">Enter to ask · Shift+Enter for a new line · every run is also logged to logs/</p>
+</footer>
+
+<template id="icons">
+  <svg data-icon="train" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="14" rx="3"/><path d="M5 11h14M9 21l-2-4M15 21l2-4M9 14h.01M15 14h.01"/></svg>
+  <svg data-icon="weather" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 16a4 4 0 0 1 .5-8A5.5 5.5 0 0 1 18 9.5a3.5 3.5 0 0 1-.5 6.5z"/><path d="M8 19l-1 2M12 19l-1 2M16 19l-1 2"/></svg>
+  <svg data-icon="calendar" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>
+  <svg data-icon="context" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg>
+  <svg data-icon="done" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+  <svg data-icon="none" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7.5"/><path d="M8.5 12h7"/></svg>
+  <svg data-icon="limit" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h10M10.5 8.5 14 12l-3.5 3.5M19 5v14"/></svg>
+  <svg data-icon="cut" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7 7 17"/></svg>
+  <svg data-icon="setup" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/></svg>
+  <svg data-icon="wait" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10M7 20h10M8 4c0 4.5 8 5 8 8s-8 3.5-8 8M16 4c0 4.5-8 5-8 8s8 3.5 8 8"/></svg>
+  <svg data-icon="ask" viewBox="6.5 3.5 11 17" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 9a3.5 3.5 0 1 1 4.9 3.2c-.9.4-1.4 1.2-1.4 2.2v.6M12 19h.01"/></svg>
+  <svg data-icon="gap" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5M8.5 11h5"/></svg>
+</template>
+
+<script src="/vendor/gsap.min.js"></script>
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<script>
+"use strict";
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root) => [...root.querySelectorAll(sel)];
+const thread = $("#thread"), scroller = $("#scroller"), form = $("#form"), input = $("#q"), send = $("#send");
+const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const anim = window.gsap && !calm ? window.gsap : null;
+
+// Each outcome: a seal mark, its name, and one soft line.
+const OUTCOMES = {
+  delivered: { seal: "done", name: "Answered", lines: ["Found it.", "Here is what the records say."] },
+  nodata: { seal: "none", name: "Not in the records", lines: ["Nothing made up."] },
+  partly: { seal: "none", name: "Partly in the records", lines: ["The rest is not in the records. Nothing made up."] },
+  steps: { seal: "limit", name: "Step limit reached", lines: ["Out of steps before an answer. A narrower question may help."] },
+  dropped: { seal: "cut", name: "Connection failed", lines: ["The model could not be reached. Try again in a moment."] },
+  setup: { seal: "setup", name: "Setup needed", lines: ["Something in .env needs a look."] },
+  offline: { seal: "cut", name: "Server not running", lines: ["Start it with python -m agent.web."] },
+  working: { seal: "wait", name: "Looking it up", lines: [] },
+};
+const WORKING = ["checking the timetable", "reading the calendar", "looking at the sky", "reading the records"];
+const pick = list => list[Math.floor(Math.random() * list.length)];
+
+function el(tag, props = {}, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") node.className = v; else if (k === "text") node.textContent = v;
+    else if (k === "style") node.style.cssText = v; else node.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null) node.append(kid);
+  return node;
+}
+const icon = name => $(`[data-icon="${name}"]`, $("#icons").content).cloneNode(true);
+const seal = (mark, label) => el("span", { class: "seal", role: "img", "aria-label": label }, icon(mark));
+const fmtDate = iso => {
+  const d = new Date(iso + "T12:00:00");
+  return isNaN(d) ? iso : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+};
+
+function renderMarkdown(text) {
+  const box = el("div", { class: "panel answer" });
+  if (window.marked && window.DOMPurify) {
+    // The model writes narrow no-break spaces and hyphens; markdown needs plain ones to see lists.
+    const plain = text.replace(/[   ]/g, " ").replace(/[‐‑]/g, "-")
+      .replace(/\*\*[ \t]*([^*\n]*?)[ \t]*\*\*/g, "**$1**"); // "**09:00 **" would print its asterisks
+    box.innerHTML = DOMPurify.sanitize(marked.parse(plain));
+    box.querySelectorAll("table").forEach(t => t.replaceWith(el("div", { class: "table-wrap" }, t.cloneNode(true))));
+  } else {
+    box.style.whiteSpace = "pre-wrap";
+    box.textContent = text;
+  }
+  return box;
+}
+
+// ---- outcome of one run, read from the exit code and the run log ----
+// A gap is data the run never got: missing (404), or a city that is not in the data and that no later
+// call of the same tool for the same day replaced. A typo the model fixed (munich -> muenchen) is no gap.
+// ponytail: "replaced" matches tool + date, so Berlin weather then Munich weather on one day reads as fixed.
+const isMissing = r => /^LookupError/.test(r.result?.error || "");
+const badCity = r => (r.result?.error || "").match(/^ValueError: \w+='([^']*)' is not a city in the data/)?.[1];
+function gaps(events) {
+  const results = events.filter(e => e.event === "tool_result");
+  return results.filter((r, i) => !r.ok && (isMissing(r) || (badCity(r) && !results.slice(i + 1).some(
+    o => o.ok && o.tool === r.tool && o.args?.date === r.args?.date))));
+}
+function outcome(run) {
+  const last = run.events[run.events.length - 1] || {};
+  if (run.exit_code === 0) {
+    if (!gaps(run.events).length) return "delivered";
+    return run.events.some(e => e.event === "tool_result" && e.ok && e.tool !== "get_context") ? "partly" : "nodata";
+  }
+  if (run.exit_code === 2) return "setup";
+  // A wrong key, a missing permission or an unknown model is a setup problem; waiting won't fix it.
+  if (["AuthenticationError", "PermissionDeniedError", "NotFoundError"].includes(last.type)) return "setup";
+  return last.type === "StepLimit" ? "steps" : "dropped";
+}
+
+// ---- data cards: only what a tool actually returned ----
+function cards(events) {
+  const seen = new Set(), out = [];
+  const unresolved = new Set(gaps(events));
+  for (const r of events.filter(e => e.event === "tool_result")) {
+    const key = r.tool + JSON.stringify(r.args);
+    if (seen.has(key)) continue;
+    const card = r.ok ? dataCard(r) : unresolved.has(r) ? gapCard(r) : null; // fixed calls live in the trail
+    if (card) { seen.add(key); out.push(card); }
+  }
+  out.sort((a, b) => a.classList.contains("wide") - b.classList.contains("wide")); // small cards pair up, tables go last
+  const small = out.filter(c => !c.classList.contains("wide"));
+  if (small.length % 2) small[small.length - 1].classList.add("wide"); // an odd one out takes the full row
+  return out.length ? el("div", { class: "cards" }, out) : null;
+}
+
+function head(iconName, title, when) {
+  return el("div", { class: "card-head" }, icon(iconName), el("h3", { text: title }), when ? el("span", { class: "when", text: when }) : null);
+}
+
+function dataCard({ tool, result: d }) {
+  if (tool === "get_weather") {
+    const rain = Math.round((d.rain_probability ?? 0) * 100);
+    return el("section", { class: "panel card weather" },
+      head("weather", `Weather in ${d.city}`, fmtDate(d.date)),
+      el("div", { class: "temp" }, `${d.temp_c}`, el("small", { text: "°C" })),
+      el("div", { class: "cond", text: `${d.condition} · wind ${d.wind_kmh} km/h` }),
+      el("div", { class: "rain" }, el("span", { text: `Rain ${rain}%` }),
+        el("div", { class: "rain-bar", role: "img", "aria-label": `${rain} percent chance of rain` }, el("i", { style: `width:${rain}%` }))),
+      rain >= 50 ? el("span", { class: "tag", text: "Take an umbrella" }) : null);
+  }
+  if (tool === "get_connections") {
+    const card = el("section", { class: "panel card wide trains" }, head("train", `Trains ${d.from} → ${d.to}`, fmtDate(d.date)));
+    if (!d.connections?.length) return card.append(el("p", { class: "muted", text: "No trains on this route that day." })), card;
+    const rows = d.connections.map(c => el("tr", {},
+      el("td", { text: c.departure }), el("td", { text: c.arrival }), el("td", { class: "train", text: c.train }),
+      el("td", { class: "changes", text: c.changes === 0 ? "direct" : `${c.changes} change${c.changes > 1 ? "s" : ""}` }),
+      el("td", { text: c.price_eur != null ? `€${Number(c.price_eur).toFixed(2)}` : "—" })));
+    card.append(el("div", { class: "table-wrap" }, el("table", {},
+      el("thead", {}, el("tr", {}, ["Departs", "Arrives", "Train", "Changes", "Price"].map(h => el("th", { scope: "col", text: h })))),
+      el("tbody", {}, rows))));
+    return card;
+  }
+  if (tool === "get_calendar_day") {
+    const card = el("section", { class: "panel card" }, head("calendar", "Calendar", fmtDate(d.date)));
+    if (!d.events?.length) return card.append(el("p", { class: "muted", text: "A free day. Nothing booked." })), card;
+    card.append(el("ul", { class: "events" }, d.events.map(e => el("li", {},
+      el("time", { text: e.all_day ? "all day" : `${e.start}–${e.end}` }),
+      el("span", {}, e.title, e.location ? el("small", { text: e.location }) : null)))));
+    return card;
+  }
+  if (tool === "get_context") {
+    return el("section", { class: "panel card wide" }, head("context", "Context"),
+      el("div", { class: "facts" },
+        d.home ? el("span", { class: "chip" }, "home ", el("b", { text: d.home })) : null,
+        d.now ? el("span", { class: "chip" }, "now ", el("b", { text: d.now.replace("T", " ") })) : null));
+  }
+  return null;
+}
+
+function gapCard(r) {
+  const { tool, args } = r, city = badCity(r);
+  const what = { get_weather: "Weather", get_connections: "Trains", get_calendar_day: "Calendar" }[tool] || tool;
+  const where = [args.city, args.from_city && `${args.from_city} → ${args.to_city}`].filter(Boolean).join(" ");
+  return el("section", { class: "panel card gap-card" }, head("gap", `${what}: not in the records`, args.date ? fmtDate(args.date) : null),
+    el("p", { text: city ? `“${city}” is not a city in the data.` : `No data for ${where || "this"} on that day.` }));
+}
+
+// ---- step trail ----
+function runTokens(events) {
+  const seen = new Set();
+  return events.reduce((sum, e) => {
+    const key = e.step;
+    if (!e.usage || seen.has(key)) return sum;
+    seen.add(key);
+    return sum + (e.usage.total_tokens || 0);
+  }, 0);
+}
+function trail(run) {
+  const items = [];
+  let calls = 0, failed = 0, steps = 0;
+  for (const e of run.events) {
+    if (e.step) steps = Math.max(steps, e.step);
+    if (e.event === "tool_result") {
+      calls++; if (!e.ok) failed++;
+      items.push(step(e.step, !e.ok, el("span", {}, el("b", { text: e.tool }), " ", el("code", { text: typeof e.args === "string" ? e.args : JSON.stringify(e.args) }),
+        e.ok ? null : el("span", { class: "why", text: e.result?.error })), e.duration_ms));
+    } else if (e.event === "error" && e.exit_code == null) {
+      failed++;
+      items.push(step(e.step, true, el("span", {}, el("b", { text: "step failed" }), el("span", { class: "why", text: e.message })), e.duration_ms));
+    } else if (e.event === "final") {
+      items.push(step(e.step, false, el("span", {}, el("b", { text: "answered" }), " · exit 0"), e.duration_ms, true));
+    } else if (e.event === "error") {
+      items.push(step(e.step ?? null, true, el("span", {}, el("b", { text: e.type || "error" }), ` · exit ${e.exit_code}`, el("span", { class: "why", text: e.message })), null, true));
+    }
+  }
+  const tokens = runTokens(run.events);
+  const summary = el("summary", {}, steps ? el("span", {}, el("b", { text: `${steps} step${steps === 1 ? "" : "s"}` }),
+    ` · ${calls} tool call${calls === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : ""}${tokens ? ` · ${tokens.toLocaleString("en")} tokens` : ""}`)
+    : el("span", {}, el("b", { text: "Stopped" }), " before any step finished"));
+  return el("details", { class: "trail" }, summary, el("ol", {}, items));
+}
+function step(n, fail, what, ms, end = false) {
+  return el("li", { class: `step${fail ? " fail" : ""}${end && !fail ? " end" : ""}` },
+    el("span", { class: "cell", "aria-label": fail ? "failed" : "ok", role: "img" }),
+    el("span", { class: "n", text: n != null ? `#${n}` : "" }), el("span", { class: "what" }, what),
+    ms != null ? el("span", { class: "ms", text: `${ms} ms` }) : el("span"));
+}
+
+// ---- token budget: tokens the model used in the last minute, against its per-minute limit ----
+let tokenLimit = 0;
+async function refreshBudget() {
+  if (!tokenLimit) return;
+  try {
+    const { tokens } = await (await fetch("/api/usage")).json();
+    const share = Math.min(tokens / tokenLimit, 1);
+    const box = $("#budget");
+    box.hidden = false;
+    box.dataset.level = share >= .9 ? "full" : share >= .6 ? "high" : "low";
+    $("#budget-count").textContent = `${tokens.toLocaleString("en")} / ${tokenLimit.toLocaleString("en")}`;
+    $("#budget-fill").style.width = `${share * 100}%`;
+    $("#budget-bar").setAttribute("aria-valuemax", tokenLimit);
+    $("#budget-bar").setAttribute("aria-valuenow", tokens);
+    $("#budget-note").textContent = tokens > tokenLimit ? "Over the limit. The next question may be slowed."
+      : share >= .9 ? "Near the limit. Wait a moment."
+      : share >= .6 ? "Room for about one more question." : "Plenty of room this minute.";
+  } catch { /* the bar just keeps its last reading */ }
+}
+
+// ---- turns ----
+function outcomeHead(kind, line) {
+  const o = OUTCOMES[kind];
+  return el("div", { class: "outcome" }, seal(o.seal, o.name),
+    el("div", {}, el("h2", { text: o.name }), line ? el("p", { text: line }) : null));
+}
+
+function addTurn(question) {
+  $("#empty")?.remove();
+  const working = el("p", { class: "working-line" }, el("span", { text: pick(WORKING) + " … " }), el("b", { text: "0 s" }));
+  const reply = el("section", { class: "reply", "data-outcome": "working" }, outcomeHead("working"), working);
+  const turn = el("article", { class: "turn" },
+    el("p", { class: "ask" }, seal("ask", "Your question"), el("span", { text: question })), reply);
+  thread.append(turn);
+  scroller.scrollTop = scroller.scrollHeight;
+  const started = performance.now();
+  const timer = setInterval(() => {
+    const s = Math.round((performance.now() - started) / 1000);
+    working.lastChild.textContent = `${s} s`;
+    if (s % 4 === 0) working.firstChild.textContent = pick(WORKING) + " … ";
+  }, 1000);
+  return { turn, reply, stop: () => clearInterval(timer) };
+}
+
+function fill(reply, run) {
+  const kind = run ? outcome(run) : "offline";
+  reply.dataset.outcome = kind;
+  const screen = el("div", { class: "screen" });
+  reply.replaceChildren(outcomeHead(kind, pick(OUTCOMES[kind].lines)), screen);
+  if (!run) {
+    screen.append(el("div", { class: "panel answer error", text: "The agent server is not answering. Start it with: python -m agent.web" }));
+  } else {
+    if (run.answer) screen.append(renderMarkdown(run.answer));
+    if (run.exit_code !== 0) screen.append(el("div", { class: "panel answer error", text: run.error || "The run ended without an answer." }));
+    const data = cards(run.events);
+    if (data) screen.append(data);
+    if (run.events.length > 1) screen.append(trail(run));
+    const task = run.events.find(e => e.event === "user_task");
+    if (task) showConfig({ model: task.model, max_steps: task.max_steps });
+  }
+  slideOpen(reply, screen);
+}
+
+// The one authored moment: the seal is pressed, then the paper screen slides open from the middle.
+function slideOpen(reply, screen) {
+  if (!anim) return;
+  anim.timeline()
+    .from($(".seal", reply), { scale: 1.12, opacity: 0, duration: .6, ease: "expo.out" })
+    .from($(".outcome div", reply), { x: -8, opacity: 0, duration: .5, ease: "power2.out" }, "-=.3")
+    .fromTo(screen, { clipPath: "inset(0 50% 0 50%)", opacity: .4 },
+      { clipPath: "inset(0 0% 0 0%)", opacity: 1, duration: .9, ease: "power3.inOut", clearProps: "clipPath,opacity" }, "-=.25");
+}
+
+async function submit(question) {
+  question = question.trim();
+  if (!question || send.disabled) return;
+  input.value = ""; autosize();
+  send.disabled = true; input.setAttribute("aria-busy", "true");
+  const { turn, reply, stop } = addTurn(question);
+  let run = null;
+  try {
+    const res = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
+    const body = await res.json();
+    run = res.ok ? body : { exit_code: 2, answer: "", error: body.error || `HTTP ${res.status}`, events: [] };
+  } catch { run = null; }
+  stop();
+  fill(reply, run);
+  refreshBudget();
+  send.disabled = false; input.removeAttribute("aria-busy"); input.focus();
+  requestAnimationFrame(() => turn.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "start" }));
+}
+
+function showConfig(c) {
+  if (c.model) { $("#model-chip b").textContent = c.model; $("#model-chip").hidden = false; }
+  if (c.max_steps) { $("#steps-chip b").textContent = c.max_steps; $("#steps-chip").hidden = false; }
+  if (c.token_limit) { tokenLimit = c.token_limit; refreshBudget(); }
+}
+fetch("/api/config").then(r => r.json()).then(showConfig).catch(() => {});
+setInterval(refreshBudget, 5000); // the minute keeps rolling, so the bar drains on its own
+
+function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 180) + "px"; }
+input.addEventListener("input", autosize);
+input.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(input.value); }
+});
+form.addEventListener("submit", e => { e.preventDefault(); submit(input.value); });
+document.querySelectorAll(".sample").forEach(b => b.addEventListener("click", () => submit(b.textContent)));
+</script>
+</body>
+</html>

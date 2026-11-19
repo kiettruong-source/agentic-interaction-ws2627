@@ -90,12 +90,15 @@ class RunLog:
         logs.mkdir(exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.path = logs / f"{stamp}-{self.run_id[:8]}.jsonl"
+        self.records = []  # the same lines in memory, for the web panel (agent/web.py)
 
     def __call__(self, event, **fields):
         ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         record = {"ts": ts, "run_id": self.run_id, "event": event, "model": self.model, **fields}
+        line = json.dumps(record, ensure_ascii=False, default=str)
         with open(self.path, "a", encoding="utf-8") as file:
-            file.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            file.write(line + "\n")
+        self.records.append(json.loads(line))
 
 
 def ms_since(start):
@@ -214,9 +217,9 @@ def run(log, argv):
     return fail(log, 1, f"error: step limit of {max_steps} reached without an answer", type="StepLimit")
 
 
-def main(argv):
+def main(argv, log=None):
     load_dotenv(REPO_DIR / ".env", override=False)  # real environment variables win
-    log = RunLog(os.environ.get("MODEL", ""))
+    log = log or RunLog(os.environ.get("MODEL", ""))
     try:
         return run(log, argv)
     except KeyboardInterrupt:
